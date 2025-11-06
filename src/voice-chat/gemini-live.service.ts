@@ -9,6 +9,8 @@ export interface LiveSessionConfig {
   responseModalities?: Modality[];
   mediaResolution?: MediaResolution;
   speechConfig?: Record<string, unknown>;
+  inputAudioTranscription?: Record<string, unknown>;
+  outputAudioTranscription?: Record<string, unknown>;
 }
 
 export interface LiveSession {
@@ -37,6 +39,10 @@ export class GeminiLiveService {
       config: {
         // Keep config minimal to avoid invalid-argument on open
         responseModalities: config?.responseModalities ?? [Modality.AUDIO],
+        ...(config?.mediaResolution && { mediaResolution: config.mediaResolution }),
+        ...(config?.speechConfig && { speechConfig: config.speechConfig }),
+        ...(config?.inputAudioTranscription && { inputAudioTranscription: config.inputAudioTranscription }),
+        ...(config?.outputAudioTranscription && { outputAudioTranscription: config.outputAudioTranscription }),
       },
       callbacks: {
         onopen: () => {
@@ -45,11 +51,50 @@ export class GeminiLiveService {
         },
         onmessage: (message: LiveServerMessage) => {
           try {
-            const raw = JSON.stringify(message);
-            const preview = raw.length > 500 ? raw.slice(0, 500) + '…' : raw;
-            this.logger.debug(`Gemini Live message: ${preview}`);
-          } catch (_) {
-            this.logger.debug('Gemini Live message received (unserializable)');
+            // Print full message structure
+            const fullMessage = JSON.stringify(message, null, 2);
+            this.logger.log('=== Gemini Live Full Response ===');
+            this.logger.log(fullMessage);
+            
+            // Extract and log transcriptions if present
+            if (message.serverContent) {
+              const sc = message.serverContent as any;
+              
+              // Input transcription (user's speech)
+              if (sc.inputAudioTranscription) {
+                this.logger.log('--- INPUT TRANSCRIPTION (User Speech) ---');
+                this.logger.log(JSON.stringify(sc.inputAudioTranscription, null, 2));
+              }
+              
+              // Output transcription (model's speech)
+              if (sc.outputAudioTranscription) {
+                this.logger.log('--- OUTPUT TRANSCRIPTION (Model Speech) ---');
+                this.logger.log(JSON.stringify(sc.outputAudioTranscription, null, 2));
+              }
+              
+              // Model turn with text parts
+              if (sc.modelTurn?.parts) {
+                const textParts = sc.modelTurn.parts
+                  .filter((p: any) => p.text)
+                  .map((p: any) => p.text);
+                if (textParts.length > 0) {
+                  this.logger.log('--- MODEL TEXT PARTS ---');
+                  textParts.forEach((text: string, idx: number) => {
+                    this.logger.log(`Text Part ${idx + 1}: ${text}`);
+                  });
+                }
+              }
+              
+              // Turn complete indicator
+              if (sc.turnComplete) {
+                this.logger.log('--- TURN COMPLETE ---');
+              }
+            }
+            
+            this.logger.log('=== End of Response ===\n');
+          } catch (e) {
+            this.logger.error('Error parsing Live message:', e);
+            this.logger.debug('Raw message received (unserializable)');
           }
           callbacks?.onMessage?.(message);
         },

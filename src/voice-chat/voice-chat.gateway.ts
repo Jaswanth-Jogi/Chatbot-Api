@@ -59,6 +59,13 @@ export class VoiceChatGateway implements OnGatewayInit {
           'gemini-2.5-flash-native-audio-preview-09-2025',
           {
             responseModalities: [Modality.AUDIO],
+            // Enable transcriptions to get text versions of audio
+            inputAudioTranscription: {
+              // Transcribe user's speech (input audio)
+            },
+            outputAudioTranscription: {
+              // Transcribe model's speech (output audio)
+            },
           },
           {
             onMessage: (m: LiveServerMessage) => this.send(socket, { type: 'server', message: m }),
