@@ -12,12 +12,16 @@ dotenv.config();
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { join } from 'path';
 import { ReflectionService } from '@grpc/reflection';
+import { WsAdapter } from '@nestjs/platform-ws';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
     new FastifyAdapter(),
   );
+
+  // Use raw WebSocket adapter (ws) for compatibility with Qt QWebSocket
+  app.useWebSocketAdapter(new WsAdapter(app));
 
   const combinedProtoPath = [
     join(process.cwd(), '/src/proto', 'health.proto'),

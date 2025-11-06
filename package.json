@@ -28,6 +28,7 @@
     "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.1",
     "@nestjs/microservices": "^11.1.6",
+    "@nestjs/platform-ws": "^11.1.5",
     "@nestjs/mongoose": "^11.0.3",
     "@nestjs/platform-fastify": "^11.1.5",
     "@nestjs/swagger": "^11.2.0",
@@ -39,7 +40,8 @@
     "mongoose": "^8.17.0",
     "nestjs-grpc-reflection": "^0.2.2",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.2"
+    "rxjs": "^7.8.2",
+    "ws": "^8.18.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",
