@@ -11,6 +11,7 @@ export interface LiveSessionConfig {
   speechConfig?: Record<string, unknown>;
   inputAudioTranscription?: Record<string, unknown>;
   outputAudioTranscription?: Record<string, unknown>;
+  systemInstruction?: string | { parts: Array<{ text: string }> };
 }
 
 export interface LiveSession {
@@ -43,6 +44,7 @@ export class GeminiLiveService {
         ...(config?.speechConfig && { speechConfig: config.speechConfig }),
         ...(config?.inputAudioTranscription && { inputAudioTranscription: config.inputAudioTranscription }),
         ...(config?.outputAudioTranscription && { outputAudioTranscription: config.outputAudioTranscription }),
+        ...(config?.systemInstruction && { systemInstruction: config.systemInstruction }),
       },
       callbacks: {
         onopen: () => {
