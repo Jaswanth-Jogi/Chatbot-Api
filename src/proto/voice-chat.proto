@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package voicechat.v1;
+
+// The VoiceChat service provides operations for managing voice chat
+service VoiceChatService {
+  // Get an ephemeral token for secure client-side authentication
+  rpc GetEphemeralToken(Empty) returns (EphemeralTokenResponse);
+  
+  // Save a voice conversation turn
+  rpc SaveVoiceTurn(SaveVoiceTurnRequest) returns (VoiceTurn);
+}
+
+// Request to save a voice turn
+message SaveVoiceTurnRequest {
+  string user = 1;
+  string model = 2;
+}
+
+// Response containing voice turn information
+message VoiceTurn {
+  string id = 1;
+  string user = 2;
+  string model = 3;
+  string timestamp = 4;
+}
+
+// Response containing ephemeral token
+message EphemeralTokenResponse {
+  string token = 1;
+}
+
+// Empty message
+message Empty {}
+

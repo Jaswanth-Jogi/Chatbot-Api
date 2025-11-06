@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package chat.v1;
+
+// The Chat service provides operations for managing text chat messages
+service ChatService {
+  // Send a text message and get a response
+  rpc SendMessage(SendMessageRequest) returns (ChatMessage);
+  
+  // Get chat history
+  rpc GetChatHistory(Empty) returns (ChatHistoryResponse);
+}
+
+// Request to send a message
+message SendMessageRequest {
+  string message = 1;
+  repeated ChatMessage history = 2;
+}
+
+// Response containing a chat message
+message ChatMessage {
+  string role = 1;
+  string content = 2;
+  string timestamp = 3;
+}
+
+// Response containing chat history
+message ChatHistoryResponse {
+  repeated ChatMessage messages = 1;
+}
+
+// Empty message
+message Empty {}
+
