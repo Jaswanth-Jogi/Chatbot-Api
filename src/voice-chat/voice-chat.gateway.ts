@@ -3,6 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Server as WsServer, WebSocket } from 'ws';
 import { GeminiLiveService } from './gemini-live.service';
 import { Modality, MediaResolution, Session, LiveServerMessage } from '@google/genai';
+import { ChatService } from '../chat/chat.service';
 
 type ClientMessage =
   | { type: 'start'; config?: any }
@@ -20,7 +21,10 @@ export class VoiceChatGateway implements OnGatewayInit {
   private chunkCounts = new WeakMap<WebSocket, number>();
   private totalBytes = new WeakMap<WebSocket, number>();
 
-  constructor(private readonly live: GeminiLiveService) {}
+  constructor(
+    private readonly live: GeminiLiveService,
+    private readonly chatService: ChatService,
+  ) {}
 
   afterInit(server: WsServer) {
     this.logger.log('WS Gateway initialized at /voice-chat');
@@ -54,6 +58,15 @@ export class VoiceChatGateway implements OnGatewayInit {
     try {
       const payload = JSON.parse(typeof data === 'string' ? data : data.toString()) as ClientMessage;
       if (payload.type === 'start') {
+        // Fetch chat history before opening session
+        let chatHistory: Array<{ role: string; content: string; timestamp: Date }> = [];
+        try {
+          chatHistory = await this.chatService.getChatHistory();
+          this.logger.debug(`Loaded ${chatHistory.length} messages from chat history`);
+        } catch (error) {
+          this.logger.warn('Failed to load chat history for voice session', error);
+        }
+
         const session = await this.live.openSession(
           // Official Live-capable model name per docs
           'gemini-2.5-flash-native-audio-preview-09-2025',
@@ -94,12 +107,46 @@ and finally always aware of that you are talking with a child under age 15 years
           },
           {
             onMessage: (m: LiveServerMessage) => this.send(socket, { type: 'server', message: m }),
-            onOpen: () => this.send(socket, { type: 'event', event: 'opened' }),
+            onOpen: () => {
+              this.send(socket, { type: 'event', event: 'opened' });
+            },
             onError: (e) => this.send(socket, { type: 'event', event: 'error', message: e.message }),
             onClose: (e) => this.send(socket, { type: 'event', event: 'closed', reason: e.reason }),
           },
         );
+        
+        // Store session first
         this.clientSessions.set(socket, session);
+        
+        // Send chat history as context after session is created
+        if (chatHistory && chatHistory.length > 0) {
+          try {
+            // Limit to last 5 messages to avoid excessive token usage
+            const recentHistory = chatHistory.slice(-5);
+            
+            // Format history as a single conversation context string
+            const contextParts = recentHistory.map((msg) => {
+              const role = msg.role === 'user' ? 'User' : 'Assistant';
+              return `${role}: ${msg.content}`;
+            });
+            
+            // Combine into a single context message
+            const contextText = `[Previous conversation context]\n${contextParts.join('\n\n')}`;
+            
+            // Send as a single text input (wait a bit for session to be ready)
+            setTimeout(async () => {
+              try {
+                await this.live.sendText(session, contextText);
+                this.logger.debug(`Sent ${recentHistory.length} recent messages from chat history as context`);
+              } catch (error) {
+                this.logger.warn('Failed to send chat history context', error);
+              }
+            }, 500); // Small delay to ensure session is ready
+          } catch (error) {
+            this.logger.warn('Failed to prepare chat history context', error);
+          }
+        }
+        
         this.send(socket, { ok: true });
         return;
       }

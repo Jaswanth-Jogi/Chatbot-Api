@@ -123,6 +123,13 @@ export class GeminiLiveService {
     });
   }
 
+  async sendText(session: Session, text: string) {
+    // Send text context to the Live API session
+    await session.sendRealtimeInput({
+      text: text,
+    });
+  }
+
   async end(session: Session) {
     try {
       session.close();
