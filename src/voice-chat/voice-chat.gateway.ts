@@ -20,6 +20,11 @@ export class VoiceChatGateway implements OnGatewayInit {
   private clientSessions = new WeakMap<WebSocket, Session>();
   private chunkCounts = new WeakMap<WebSocket, number>();
   private totalBytes = new WeakMap<WebSocket, number>();
+  // Track current voice chat turn transcriptions per socket
+  private currentUserTranscription = new WeakMap<WebSocket, string>();
+  private currentModelTranscription = new WeakMap<WebSocket, string>();
+  private turnSaved = new WeakMap<WebSocket, boolean>(); // Track if current turn has been saved
+  private saveTurnTimeout = new WeakMap<WebSocket, NodeJS.Timeout>(); // Timeout for debounced save after turnComplete
 
   constructor(
     private readonly live: GeminiLiveService,
@@ -35,6 +40,10 @@ export class VoiceChatGateway implements OnGatewayInit {
     this.logger.log('Client connected');
     socket.on('message', (data) => this.onMessage(socket, data));
     socket.on('close', async () => {
+      // Save any pending turn before disconnecting
+      this.clearSaveTimeout(socket);
+      await this.trySaveTurn(socket);
+      
       const sess = this.clientSessions.get(socket);
       if (sess) {
         await this.live.end(sess);
@@ -44,6 +53,10 @@ export class VoiceChatGateway implements OnGatewayInit {
     });
     this.chunkCounts.set(socket, 0);
     this.totalBytes.set(socket, 0);
+    // Initialize transcription tracking
+    this.currentUserTranscription.set(socket, '');
+    this.currentModelTranscription.set(socket, '');
+    this.turnSaved.set(socket, false);
   }
 
   private send(socket: WebSocket, payload: unknown) {
@@ -106,7 +119,12 @@ even if you don't get the [history, child data and ToneStyle], continue based on
 and finally always aware of that you are talking with a child under age 15 years so respond based on that. note that for system questions you can suggest only can't directly do anything like adding subjects etc, guide child. `,
           },
           {
-            onMessage: (m: LiveServerMessage) => this.send(socket, { type: 'server', message: m }),
+            onMessage: async (m: LiveServerMessage) => {
+              // Process transcriptions and save to DB
+              await this.handleLiveMessage(socket, m);
+              // Forward message to client
+              this.send(socket, { type: 'server', message: m });
+            },
             onOpen: () => {
               this.send(socket, { type: 'event', event: 'opened' });
             },
@@ -180,6 +198,15 @@ and finally always aware of that you are talking with a child under age 15 years
       }
 
       if (payload.type === 'stop') {
+        // Clear any pending timeout and save immediately
+        this.clearSaveTimeout(socket);
+        await this.trySaveTurn(socket);
+        
+        // Clear all tracking
+        this.currentUserTranscription.set(socket, '');
+        this.currentModelTranscription.set(socket, '');
+        this.turnSaved.set(socket, false);
+        
         await this.live.end(session);
         this.clientSessions.delete(socket);
         this.send(socket, { ok: true });
@@ -190,6 +217,151 @@ and finally always aware of that you are talking with a child under age 15 years
     } catch (e: any) {
       this.logger.error('Gateway message error', e);
       this.send(socket, { ok: false, error: e?.message ?? 'internal error' });
+    }
+  }
+
+  private async handleLiveMessage(socket: WebSocket, message: LiveServerMessage): Promise<void> {
+    try {
+      if (!message.serverContent) return;
+
+      const sc = message.serverContent as any;
+
+      // Handle input transcription (user's speech)
+      // Note: The API uses "inputTranscription" (not "inputAudioTranscription")
+      // It may come incrementally or as complete text
+      if (sc.inputTranscription?.text) {
+        const userText = sc.inputTranscription.text.trim();
+        if (userText) {
+          const currentUserTranscription = this.currentUserTranscription.get(socket) || '';
+          const isNewTurn = this.turnSaved.get(socket);
+          
+          if (isNewTurn) {
+            // Previous turn was saved, so this is a new turn starting
+            // Save any pending turn (shouldn't happen, but safety check)
+            this.clearSaveTimeout(socket);
+            await this.trySaveTurn(socket);
+            
+            // Start fresh for new turn
+            this.currentUserTranscription.set(socket, userText);
+            this.currentModelTranscription.set(socket, '');
+            this.turnSaved.set(socket, false);
+            this.logger.debug(`New turn started - User transcription: ${userText}`);
+          } else if (currentUserTranscription === '') {
+            // First user transcription for this turn
+            this.currentUserTranscription.set(socket, userText);
+            this.logger.debug(`User transcription started: ${userText}`);
+          } else {
+            // Accumulate user transcription (incremental updates for same turn)
+            // If new text includes the current text, it's likely a complete replacement
+            // Otherwise, append the new chunk
+            if (userText.includes(currentUserTranscription) && userText.length > currentUserTranscription.length) {
+              // Complete replacement (new text is longer and includes old text)
+              this.currentUserTranscription.set(socket, userText);
+              this.logger.debug(`User transcription replaced (complete): ${userText}`);
+            } else if (currentUserTranscription.includes(userText)) {
+              // New text is already in current - might be duplicate, keep the longer one
+              if (userText.length > currentUserTranscription.length) {
+                this.currentUserTranscription.set(socket, userText);
+              }
+              this.logger.debug(`User transcription (duplicate/refinement): ${userText}`);
+            } else {
+              // New chunk - append it
+              this.currentUserTranscription.set(socket, currentUserTranscription + ' ' + userText);
+              this.logger.debug(`User transcription appended: ${userText} | Total: ${this.currentUserTranscription.get(socket)}`);
+            }
+            
+            // Reset save timeout to wait for more chunks
+            this.resetSaveTimeout(socket);
+          }
+        }
+      }
+
+      // Handle output transcription (model's speech) - incremental
+      // Note: The API uses "outputTranscription" (not "outputAudioTranscription")
+      if (sc.outputTranscription?.text) {
+        const modelText = sc.outputTranscription.text;
+        if (modelText) {
+          // Accumulate model transcription
+          const current = this.currentModelTranscription.get(socket) || '';
+          this.currentModelTranscription.set(socket, current + modelText);
+          this.logger.debug(`Model transcription updated: ${modelText}`);
+          
+          // If we have a pending save timeout (after turnComplete), reset it
+          // This allows us to wait for more transcription chunks
+          this.resetSaveTimeout(socket);
+        }
+      }
+
+      // Handle turn complete - schedule a debounced save
+      // Transcriptions might arrive after turnComplete, so we wait a bit
+      if (sc.turnComplete) {
+        this.logger.debug('Turn complete received, scheduling debounced save');
+        // Schedule save after a delay to allow final transcriptions to arrive
+        this.scheduleSaveTurn(socket, 2000); // Wait 2 seconds after turnComplete
+      }
+    } catch (error) {
+      this.logger.error('Error handling live message', error);
+    }
+  }
+
+  private async trySaveTurn(socket: WebSocket): Promise<void> {
+    // Skip if already saved this turn
+    if (this.turnSaved.get(socket)) {
+      return;
+    }
+
+    const userTranscription = (this.currentUserTranscription.get(socket) || '').trim();
+    const modelTranscription = (this.currentModelTranscription.get(socket) || '').trim();
+
+    if (userTranscription && modelTranscription) {
+      try {
+        await this.chatService.saveVoiceChatTurn(userTranscription, modelTranscription);
+        this.logger.debug(`Saved voice chat turn: user="${userTranscription.substring(0, 50)}...", model="${modelTranscription.substring(0, 50)}..."`);
+        
+        // Clear timeout since we've saved
+        this.clearSaveTimeout(socket);
+        
+        // Mark as saved and clear transcriptions for next turn
+        this.turnSaved.set(socket, true);
+        this.currentUserTranscription.set(socket, '');
+        this.currentModelTranscription.set(socket, '');
+      } catch (error) {
+        this.logger.error('Failed to save voice chat turn', error);
+        // Don't clear on error - might retry later
+      }
+    } else {
+      this.logger.debug(`Cannot save turn yet - user: ${userTranscription ? 'yes' : 'no'}, model: ${modelTranscription ? 'yes' : 'no'}`);
+    }
+  }
+
+  private scheduleSaveTurn(socket: WebSocket, delayMs: number): void {
+    // Clear any existing timeout
+    this.clearSaveTimeout(socket);
+    
+    // Set new timeout to save after delay
+    const timeout = setTimeout(async () => {
+      this.logger.debug(`Debounced save timeout fired, attempting to save turn`);
+      await this.trySaveTurn(socket);
+      this.saveTurnTimeout.delete(socket);
+    }, delayMs);
+    
+    this.saveTurnTimeout.set(socket, timeout);
+  }
+
+  private resetSaveTimeout(socket: WebSocket): void {
+    // If there's a pending timeout, reset it (debounce)
+    const existingTimeout = this.saveTurnTimeout.get(socket);
+    if (existingTimeout) {
+      this.logger.debug('Resetting save timeout due to new transcription chunk');
+      this.scheduleSaveTurn(socket, 2000); // Reset to 2 seconds
+    }
+  }
+
+  private clearSaveTimeout(socket: WebSocket): void {
+    const timeout = this.saveTurnTimeout.get(socket);
+    if (timeout) {
+      clearTimeout(timeout);
+      this.saveTurnTimeout.delete(socket);
     }
   }
 }

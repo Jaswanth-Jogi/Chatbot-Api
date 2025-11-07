@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Chat, ChatDocument } from '../schemas/chat.schema';
@@ -8,6 +8,7 @@ import { ConfigService } from '@nestjs/config';
 @Injectable()
 export class ChatService {
   private genAI: GoogleGenerativeAI;
+  private readonly logger = new Logger(ChatService.name);
 
   constructor(
     @InjectModel(Chat.name)
@@ -70,18 +71,13 @@ and finally always aware of that you are talking with a child under age 15 years
       const response = await result.response;
       const responseText = response.text();
 
-      // Save user message
+      // Save text chat turn: user input with model response in the same document
       await this.chatModel.create({
         role: 'user',
         content: message,
+        modelResponse: responseText,
         timestamp: new Date(),
-      });
-
-      // Save model response
-      await this.chatModel.create({
-        role: 'model',
-        content: responseText,
-        timestamp: new Date(),
+        type: 'text',
       });
 
       return responseText;
@@ -97,11 +93,45 @@ and finally always aware of that you are talking with a child under age 15 years
       .sort({ timestamp: 1 })
       .lean();
 
-    return chats.map((chat) => ({
-      role: chat.role,
-      content: chat.content,
-      timestamp: chat.timestamp,
-    }));
+    // Expand documents: if a document has modelResponse, return both user and model messages
+    const messages: Array<{ role: string; content: string; timestamp: Date }> = [];
+    
+    for (const chat of chats) {
+      // Add user message
+      messages.push({
+        role: chat.role,
+        content: chat.content,
+        timestamp: chat.timestamp,
+      });
+      
+      // If document has modelResponse, add model message too
+      if (chat.modelResponse) {
+        messages.push({
+          role: 'model',
+          content: chat.modelResponse,
+          timestamp: chat.timestamp, // Use same timestamp or could add a small offset
+        });
+      }
+    }
+
+    return messages;
+  }
+
+  async saveVoiceChatTurn(userInput: string, modelResponse: string): Promise<void> {
+    try {
+      // Save voice chat turn: user input with model response in the same document
+      await this.chatModel.create({
+        role: 'user',
+        content: userInput,
+        modelResponse: modelResponse,
+        timestamp: new Date(),
+        type: 'voice',
+      });
+      this.logger.debug(`Saved voice chat turn: user="${userInput.substring(0, 50)}...", model="${modelResponse.substring(0, 50)}..."`);
+    } catch (error) {
+      this.logger.error('Failed to save voice chat turn', error);
+      throw error;
+    }
   }
 }
 

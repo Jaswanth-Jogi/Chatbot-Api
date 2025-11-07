@@ -13,6 +13,14 @@ export class Chat {
 
   @Prop({ type: Date, default: Date.now })
   timestamp: Date;
+
+  @Prop({ enum: ['text', 'voice'], default: 'text' })
+  type: string;
+
+  // For voice chat: store the complete conversation turn
+  // When type is 'voice' and role is 'user', this contains the model's response for this turn
+  @Prop({ required: false })
+  modelResponse?: string;
 }
 
 export const ChatSchema = SchemaFactory.createForClass(Chat);
