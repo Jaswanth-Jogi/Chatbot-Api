@@ -6,7 +6,7 @@ import { Modality, MediaResolution, Session, LiveServerMessage } from '@google/g
 import { ChatService } from '../chat/chat.service';
 
 type ClientMessage =
-  | { type: 'start'; config?: any }
+  | { type: 'start'; config?: any; resumptionHandle?: string }
   | { type: 'audio_chunk'; data: string }
   | { type: 'text'; text: string; end?: boolean }
   | { type: 'stop' };
@@ -25,6 +25,17 @@ export class VoiceChatGateway implements OnGatewayInit {
   private currentModelTranscription = new WeakMap<WebSocket, string>();
   private turnSaved = new WeakMap<WebSocket, boolean>(); // Track if current turn has been saved
   private saveTurnTimeout = new WeakMap<WebSocket, NodeJS.Timeout>(); // Timeout for debounced save after turnComplete
+  
+  // Session resumption: Token storage and state management
+  private socketToId = new Map<WebSocket, string>(); // socket -> unique socketId
+  private resumptionTokens = new Map<string, string>(); // socketId -> resumption token
+  private tokenExpiration = new Map<string, number>(); // socketId -> expiration timestamp (2 hours)
+  private socketState = new Map<string, { // socketId -> state to preserve across reconnections
+    userTranscription: string;
+    modelTranscription: string;
+    turnSaved: boolean;
+  }>();
+  private reconnectionTimeouts = new Map<string, NodeJS.Timeout>(); // socketId -> reconnection timeout
 
   constructor(
     private readonly live: GeminiLiveService,
@@ -38,17 +49,36 @@ export class VoiceChatGateway implements OnGatewayInit {
 
   private async onConnection(socket: WebSocket) {
     this.logger.log('Client connected');
+    
+    // Generate unique socket ID for this connection
+    const socketId = this.getSocketId(socket);
+    this.logger.debug(`Socket ID assigned: ${socketId}`);
+    
     socket.on('message', (data) => this.onMessage(socket, data));
     socket.on('close', async () => {
       // Save any pending turn before disconnecting
       this.clearSaveTimeout(socket);
       await this.trySaveTurn(socket);
       
+      // Save state before cleanup
+      this.saveSocketState(socketId, socket);
+      
+      // Clear reconnection timeout if exists
+      const reconnectTimeout = this.reconnectionTimeouts.get(socketId);
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+        this.reconnectionTimeouts.delete(socketId);
+      }
+      
       const sess = this.clientSessions.get(socket);
       if (sess) {
         await this.live.end(sess);
         this.clientSessions.delete(socket);
       }
+      
+      // Clean up socket mapping (but keep token and state for potential reconnection)
+      this.socketToId.delete(socket);
+      
       this.logger.log('Client disconnected');
     });
     this.chunkCounts.set(socket, 0);
@@ -57,6 +87,43 @@ export class VoiceChatGateway implements OnGatewayInit {
     this.currentUserTranscription.set(socket, '');
     this.currentModelTranscription.set(socket, '');
     this.turnSaved.set(socket, false);
+  }
+
+  /**
+   * Generate or retrieve unique socket ID for tracking across reconnections
+   */
+  private getSocketId(socket: WebSocket): string {
+    let socketId = this.socketToId.get(socket);
+    if (!socketId) {
+      // Generate unique ID: socket_timestamp_random
+      socketId = `socket_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+      this.socketToId.set(socket, socketId);
+    }
+    return socketId;
+  }
+
+  /**
+   * Save socket state (transcriptions) for potential reconnection
+   */
+  private saveSocketState(socketId: string, socket: WebSocket): void {
+    this.socketState.set(socketId, {
+      userTranscription: this.currentUserTranscription.get(socket) || '',
+      modelTranscription: this.currentModelTranscription.get(socket) || '',
+      turnSaved: this.turnSaved.get(socket) || false,
+    });
+  }
+
+  /**
+   * Restore socket state from previous connection
+   */
+  private restoreSocketState(socketId: string, socket: WebSocket): void {
+    const state = this.socketState.get(socketId);
+    if (state) {
+      this.currentUserTranscription.set(socket, state.userTranscription);
+      this.currentModelTranscription.set(socket, state.modelTranscription);
+      this.turnSaved.set(socket, state.turnSaved);
+      this.logger.debug(`Restored state for socket ${socketId}`);
+    }
   }
 
   private send(socket: WebSocket, payload: unknown) {
@@ -71,13 +138,44 @@ export class VoiceChatGateway implements OnGatewayInit {
     try {
       const payload = JSON.parse(typeof data === 'string' ? data : data.toString()) as ClientMessage;
       if (payload.type === 'start') {
-        // Fetch chat history before opening session
+        const socketId = this.getSocketId(socket);
+        const resumptionHandle = payload.resumptionHandle;
+        const isResuming = !!resumptionHandle;
+        
+        // Check token expiration if resuming
+        if (isResuming) {
+          const expiration = this.tokenExpiration.get(socketId);
+          if (expiration && Date.now() > expiration) {
+            this.logger.warn(`Resumption token expired for socket ${socketId}, creating fresh session`);
+            // Clear expired token
+            this.resumptionTokens.delete(socketId);
+            this.tokenExpiration.delete(socketId);
+            // Fall through to create fresh session
+          } else if (!expiration) {
+            this.logger.warn(`No expiration found for resumption token, treating as expired`);
+            // Fall through to create fresh session
+          }
+        }
+        
+        // Restore state if resuming
+        if (isResuming) {
+          this.restoreSocketState(socketId, socket);
+          this.logger.debug(`Resuming session with handle for socket ${socketId}`);
+        } else {
+          // Clear any old state for fresh session
+          this.socketState.delete(socketId);
+          this.logger.debug(`Starting fresh session for socket ${socketId}`);
+        }
+        
+        // Fetch chat history before opening session (only for fresh sessions)
         let chatHistory: Array<{ role: string; content: string; timestamp: Date }> = [];
-        try {
-          chatHistory = await this.chatService.getChatHistory();
-          this.logger.debug(`Loaded ${chatHistory.length} messages from chat history`);
-        } catch (error) {
-          this.logger.warn('Failed to load chat history for voice session', error);
+        if (!isResuming) {
+          try {
+            chatHistory = await this.chatService.getChatHistory();
+            this.logger.debug(`Loaded ${chatHistory.length} messages from chat history`);
+          } catch (error) {
+            this.logger.warn('Failed to load chat history for voice session', error);
+          }
         }
 
         const session = await this.live.openSession(
@@ -90,6 +188,10 @@ export class VoiceChatGateway implements OnGatewayInit {
             contextWindowCompression: {
               slidingWindow: {},
             },
+            // Session resumption: Enable for new sessions, use handle for resuming
+            sessionResumption: isResuming && resumptionHandle
+              ? { handle: resumptionHandle }
+              : {}, // Empty object enables resumption for future reconnections
             // Enable transcriptions to get text versions of audio
             inputAudioTranscription: {
               // Transcribe user's speech (input audio)
@@ -133,16 +235,59 @@ and finally always aware of that you are talking with a child under age 15 years
             onOpen: () => {
               this.send(socket, { type: 'event', event: 'opened' });
             },
-            onError: (e) => this.send(socket, { type: 'event', event: 'error', message: e.message }),
-            onClose: (e) => this.send(socket, { type: 'event', event: 'closed', reason: e.reason }),
+            onError: (e) => {
+              this.logger.error(`Gemini Live session error: ${e.message}`);
+              this.send(socket, { type: 'event', event: 'error', message: e.message });
+              // Clear session on error
+              this.clientSessions.delete(socket);
+            },
+            onClose: async (e) => {
+              const socketId = this.getSocketId(socket);
+              this.logger.warn(`Gemini Live session closed: ${e.reason || 'unknown reason'}`);
+              
+              // Save any pending turn before closing
+              this.clearSaveTimeout(socket);
+              await this.trySaveTurn(socket);
+              
+              // Clear the session
+              this.clientSessions.delete(socket);
+              
+              // Try to reconnect with resumption if we have a valid token
+              // Reconnect immediately since connection is already closed
+              const resumptionToken = this.resumptionTokens.get(socketId);
+              const expiration = this.tokenExpiration.get(socketId);
+              
+              if (resumptionToken && expiration && Date.now() < expiration) {
+                this.logger.log(`Connection closed, reconnecting session ${socketId} with resumption token immediately`);
+                try {
+                  await this.reconnectWithResumption(socket, socketId, resumptionToken);
+                } catch (error) {
+                  this.logger.error(`Failed to reconnect session ${socketId}`, error);
+                  this.send(socket, { 
+                    type: 'event', 
+                    event: 'closed', 
+                    reason: e.reason || 'connection_closed',
+                    reconnectFailed: true 
+                  });
+                }
+              } else {
+                // No valid token, notify client to create new session
+                this.send(socket, { 
+                  type: 'event', 
+                  event: 'closed', 
+                  reason: e.reason || 'connection_closed',
+                  needsNewSession: true 
+                });
+              }
+            },
           },
         );
         
         // Store session first
         this.clientSessions.set(socket, session);
         
-        // Send chat history as context after session is created
-        if (chatHistory && chatHistory.length > 0) {
+        // Send chat history as context after session is created (only for fresh sessions)
+        if (!isResuming && chatHistory && chatHistory.length > 0) {
           try {
             // Limit to last 5 messages to avoid excessive token usage
             const recentHistory = chatHistory.slice(-5);
@@ -190,8 +335,19 @@ and finally always aware of that you are talking with a child under age 15 years
         if (c % 20 === 0) {
           this.logger.debug(`audio_chunk x${c}, total=${t} bytes (~${(t/16000/2).toFixed(2)}s)`);
         }
-        await this.live.sendAudio(session, payload.data);
-        this.send(socket, { ok: true });
+        try {
+          await this.live.sendAudio(session, payload.data);
+          this.send(socket, { ok: true });
+        } catch (error) {
+          // Session might be closed/dead
+          this.logger.error(`Failed to send audio chunk: ${error instanceof Error ? error.message : 'unknown error'}`);
+          this.clientSessions.delete(socket);
+          this.send(socket, { 
+            ok: false, 
+            error: 'Session closed. Please restart the session.',
+            needsNewSession: true 
+          });
+        }
         return;
       }
 
@@ -227,9 +383,94 @@ and finally always aware of that you are talking with a child under age 15 years
 
   private async handleLiveMessage(socket: WebSocket, message: LiveServerMessage): Promise<void> {
     try {
+      const socketId = this.getSocketId(socket);
+      
+      // Handle SessionResumptionUpdate: Store resumption token
+      if ((message as any).sessionResumptionUpdate) {
+        const update = (message as any).sessionResumptionUpdate;
+        if (update.resumable && update.newHandle) {
+          const token = update.newHandle;
+          // Store token with 2-hour expiration (7200000 ms)
+          const expiration = Date.now() + 2 * 60 * 60 * 1000;
+          this.resumptionTokens.set(socketId, token);
+          this.tokenExpiration.set(socketId, expiration);
+          this.logger.debug(`Resumption token received for socket ${socketId}, expires at ${new Date(expiration).toISOString()}`);
+          
+          // Forward token to client
+          this.send(socket, {
+            type: 'resumption_token',
+            token: token,
+            expiration: expiration,
+          });
+        }
+      }
+      
+      // Handle GoAway: Connection will close soon, schedule reconnection
+      if ((message as any).goAway) {
+        const goAway = (message as any).goAway;
+        const timeLeft = goAway.timeLeft || 30000; // Default 30s if not provided
+        this.logger.warn(`GoAway received for socket ${socketId}, ${timeLeft}ms until connection closes`);
+        
+        // Save current turn immediately
+        this.clearSaveTimeout(socket);
+        await this.trySaveTurn(socket);
+        
+        // Save state before reconnection
+        this.saveSocketState(socketId, socket);
+        
+        // Get resumption token
+        const resumptionToken = this.resumptionTokens.get(socketId);
+        
+        if (resumptionToken) {
+          // Check token expiration
+          const expiration = this.tokenExpiration.get(socketId);
+          if (expiration && Date.now() < expiration) {
+            // Mark that we should reconnect when connection closes
+            // Don't schedule timer - wait for actual connection close
+            this.logger.debug(`GoAway received for socket ${socketId}, will reconnect on connection close`);
+            
+            // Notify client about GoAway - reconnection will happen on close
+            this.send(socket, {
+              type: 'goaway',
+              timeLeft: timeLeft,
+              willReconnect: true,
+            });
+            // Note: Reconnection will happen in onClose handler when connection actually closes
+          } else {
+            // Token expired, notify client to create fresh session
+            this.logger.warn(`Resumption token expired for socket ${socketId}, cannot reconnect`);
+            this.send(socket, {
+              type: 'goaway',
+              timeLeft: timeLeft,
+              willReconnect: false,
+              reason: 'token_expired',
+            });
+          }
+        } else {
+          // No token available, notify client
+          this.logger.warn(`No resumption token available for socket ${socketId}, cannot reconnect`);
+          this.send(socket, {
+            type: 'goaway',
+            timeLeft: timeLeft,
+            willReconnect: false,
+            reason: 'no_token',
+          });
+        }
+        return; // Don't process other message parts after GoAway
+      }
+      
       if (!message.serverContent) return;
 
       const sc = message.serverContent as any;
+      
+      // Handle generationComplete: Response fully generated
+      if (sc.generationComplete) {
+        this.logger.debug('Generation complete - response fully generated');
+        // Save any pending turn immediately
+        await this.trySaveTurn(socket);
+        // Notify client
+        this.send(socket, { type: 'generation_complete' });
+      }
 
       // Handle input transcription (user's speech)
       // Note: The API uses "inputTranscription" (not "inputAudioTranscription")
@@ -367,6 +608,49 @@ and finally always aware of that you are talking with a child under age 15 years
     if (timeout) {
       clearTimeout(timeout);
       this.saveTurnTimeout.delete(socket);
+    }
+  }
+
+  /**
+   * Reconnect session with resumption token
+   * This is called automatically when GoAway is received
+   */
+  private async reconnectWithResumption(
+    oldSocket: WebSocket,
+    socketId: string,
+    resumptionToken: string,
+  ): Promise<void> {
+    try {
+      this.logger.log(`Reconnecting session for socket ${socketId} with resumption token`);
+      
+      // End old session gracefully
+      const oldSession = this.clientSessions.get(oldSocket);
+      if (oldSession) {
+        try {
+          await this.live.end(oldSession);
+        } catch (error) {
+          this.logger.warn('Error ending old session during reconnection', error);
+        }
+        this.clientSessions.delete(oldSocket);
+      }
+      
+      // Close old socket connection (client should reconnect)
+      // Note: We don't close the socket here - the client will handle reconnection
+      // We just notify the client to reconnect
+      this.send(oldSocket, {
+        type: 'reconnect_required',
+        resumptionToken: resumptionToken,
+        socketId: socketId,
+      });
+      
+      this.logger.debug(`Reconnection notification sent to client for socket ${socketId}`);
+    } catch (error) {
+      this.logger.error(`Error during reconnection for socket ${socketId}`, error);
+      // Notify client of reconnection failure
+      this.send(oldSocket, {
+        type: 'reconnect_failed',
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
     }
   }
 }

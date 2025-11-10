@@ -16,6 +16,9 @@ export interface LiveSessionConfig {
     slidingWindow?: {};
     triggerTokens?: string;  // SDK expects string, not number
   };
+  sessionResumption?: {
+    handle?: string;  // Resumption token for resuming a session
+  };
 }
 
 export interface LiveSession {
@@ -50,6 +53,8 @@ export class GeminiLiveService {
         ...(config?.outputAudioTranscription && { outputAudioTranscription: config.outputAudioTranscription }),
         ...(config?.systemInstruction && { systemInstruction: config.systemInstruction }),
         ...(config?.contextWindowCompression && { contextWindowCompression: config.contextWindowCompression }),
+        // Session resumption: Enable if handle provided (resume) or empty object (enable for future resumption)
+        ...(config?.sessionResumption !== undefined && { sessionResumption: config.sessionResumption }),
       },
       callbacks: {
         onopen: () => {
