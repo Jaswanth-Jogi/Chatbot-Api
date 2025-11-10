@@ -14,7 +14,7 @@ export interface LiveSessionConfig {
   systemInstruction?: string | { parts: Array<{ text: string }> };
   contextWindowCompression?: {
     slidingWindow?: {};
-    triggerTokens?: number;
+    triggerTokens?: string;  // SDK expects string, not number
   };
 }
 
