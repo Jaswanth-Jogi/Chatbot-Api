@@ -2,7 +2,7 @@ import { WebSocketGateway, WebSocketServer, OnGatewayInit } from '@nestjs/websoc
 import { Injectable, Logger } from '@nestjs/common';
 import { Server as WsServer, WebSocket } from 'ws';
 import { GeminiLiveService } from './gemini-live.service';
-import { Modality, MediaResolution, Session, LiveServerMessage } from '@google/genai';
+import { Modality, Session } from '@google/genai';
 
 type ClientMessage =
   | { type: 'start'; config?: any }
@@ -11,24 +11,49 @@ type ClientMessage =
   | { type: 'stop' };
 
 @Injectable()
-@WebSocketGateway({ path: '/voice-chat' })
-export class VoiceChatGateway implements OnGatewayInit {
+@WebSocketGateway({ path: '/voice-chat-input' })
+export class VoiceChatInputGateway implements OnGatewayInit {
   @WebSocketServer()
   server: WsServer;
-  private readonly logger = new Logger(VoiceChatGateway.name);
+  private readonly logger = new Logger(VoiceChatInputGateway.name);
   private clientSessions = new WeakMap<WebSocket, Session>();
   private chunkCounts = new WeakMap<WebSocket, number>();
   private totalBytes = new WeakMap<WebSocket, number>();
+  private sessionToOutputSocket = new Map<string, WebSocket>(); // Map session ID to output socket
+  private socketToSessionId = new WeakMap<WebSocket, string>(); // Map input socket to session ID
+  private sessionMessageBuffers = new Map<string, unknown[]>(); // Buffer messages until output socket is registered
 
   constructor(private readonly live: GeminiLiveService) {}
 
   afterInit(server: WsServer) {
-    this.logger.log('WS Gateway initialized at /voice-chat');
+    this.logger.log('Input WS Gateway initialized at /voice-chat-input');
     server.on('connection', (socket: WebSocket) => this.onConnection(socket));
   }
 
+  // Method to register output socket with session ID
+  registerOutputSocket(sessionId: string, outputSocket: WebSocket) {
+    this.sessionToOutputSocket.set(sessionId, outputSocket);
+    this.logger.log(`Registered output socket for session: ${sessionId}`);
+    
+    // Flush any buffered messages
+    const buffered = this.sessionMessageBuffers.get(sessionId);
+    if (buffered && buffered.length > 0) {
+      this.logger.log(`Flushing ${buffered.length} buffered messages for session: ${sessionId}`);
+      buffered.forEach((msg) => {
+        if (outputSocket.readyState === WebSocket.OPEN) {
+          try {
+            outputSocket.send(JSON.stringify(msg));
+          } catch (e) {
+            this.logger.warn('Failed to send buffered message', e as any);
+          }
+        }
+      });
+      this.sessionMessageBuffers.delete(sessionId);
+    }
+  }
+
   private async onConnection(socket: WebSocket) {
-    this.logger.log('Client connected');
+    this.logger.log('Input channel client connected');
     socket.on('message', (data) => this.onMessage(socket, data));
     socket.on('close', async () => {
       const sess = this.clientSessions.get(socket);
@@ -36,37 +61,60 @@ export class VoiceChatGateway implements OnGatewayInit {
         await this.live.end(sess);
         this.clientSessions.delete(socket);
       }
-      this.logger.log('Client disconnected');
+      const sessionId = this.socketToSessionId.get(socket);
+      if (sessionId) {
+        this.sessionToOutputSocket.delete(sessionId);
+        this.socketToSessionId.delete(socket);
+        this.sessionMessageBuffers.delete(sessionId);
+      }
+      this.logger.log('Input channel client disconnected');
     });
     this.chunkCounts.set(socket, 0);
     this.totalBytes.set(socket, 0);
   }
 
-  private send(socket: WebSocket, payload: unknown) {
-    try {
-      socket.send(JSON.stringify(payload));
-    } catch (e) {
-      this.logger.warn('Failed to send to client', e as any);
+  private sendToOutput(socket: WebSocket, payload: unknown) {
+    const sessionId = this.socketToSessionId.get(socket);
+    if (!sessionId) {
+      this.logger.warn('No session ID for input socket - cannot route to output channel');
+      return;
+    }
+    const outputSocket = this.sessionToOutputSocket.get(sessionId);
+    if (outputSocket && outputSocket.readyState === WebSocket.OPEN) {
+      try {
+        const payloadStr = JSON.stringify(payload);
+        outputSocket.send(payloadStr);
+        // Log message type for debugging
+        const payloadObj = payload as any;
+        const msgType = payloadObj?.type || payloadObj?.message?.serverContent ? 'serverContent' : 'other';
+        this.logger.debug(`[OUTPUT CHANNEL] Sent ${msgType} message to session: ${sessionId}`);
+      } catch (e) {
+        this.logger.warn('Failed to send to output channel', e as any);
+      }
+    } else {
+      // Buffer the message until output socket is registered
+      if (!this.sessionMessageBuffers.has(sessionId)) {
+        this.sessionMessageBuffers.set(sessionId, []);
+      }
+      this.sessionMessageBuffers.get(sessionId)!.push(payload);
+      this.logger.debug(`Buffered message for session: ${sessionId} (output socket not yet registered)`);
     }
   }
 
   private async onMessage(socket: WebSocket, data: WebSocket.RawData) {
     try {
       const payload = JSON.parse(typeof data === 'string' ? data : data.toString()) as ClientMessage;
+      
       if (payload.type === 'start') {
+        // Generate a unique session ID
+        const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        
         const session = await this.live.openSession(
-          // Official Live-capable model name per docs
           'gemini-2.5-flash-native-audio-preview-09-2025',
           {
             responseModalities: [Modality.AUDIO],
-            // Enable transcriptions to get text versions of audio
-            inputAudioTranscription: {
-              // Transcribe user's speech (input audio)
-            },
-            outputAudioTranscription: {
-              // Transcribe model's speech (output audio)
-            },
-            // System instruction: Define AI role for children's voice chat
+            inputAudioTranscription: {},
+            outputAudioTranscription: {},
             systemInstruction: `role : you are "Oriel", a child personal companian and a whole system yourself.
 tasks :
 give proper responces to child based on the child input and the child data you are provided with.
@@ -93,25 +141,36 @@ even if you don't get the [history, child data and ToneStyle], continue based on
 and finally always aware of that you are talking with a child under age 15 years so respond based on that.`,
           },
           {
-            onMessage: (m: LiveServerMessage) => this.send(socket, { type: 'server', message: m }),
-            onOpen: () => this.send(socket, { type: 'event', event: 'opened' }),
-            onError: (e) => this.send(socket, { type: 'event', event: 'error', message: e.message }),
-            onClose: (e) => this.send(socket, { type: 'event', event: 'closed', reason: e.reason }),
+            onMessage: (m) => this.sendToOutput(socket, { type: 'server', message: m }),
+            onOpen: () => this.sendToOutput(socket, { type: 'event', event: 'opened' }),
+            onError: (e) => this.sendToOutput(socket, { type: 'event', event: 'error', message: e.message }),
+            onClose: (e) => this.sendToOutput(socket, { type: 'event', event: 'closed', reason: e.reason }),
           },
         );
         this.clientSessions.set(socket, session);
-        this.send(socket, { ok: true });
+        this.socketToSessionId.set(socket, sessionId);
+        // CRITICAL: Only send sessionId to input channel - this is the ONLY message that should go to input channel
+        // ALL other output (transcriptions, audio, events, responses) MUST go through output channel via sendToOutput()
+        // NEVER send output data directly to input socket - it will cause data mixing!
+        try {
+          const sessionIdMsg = JSON.stringify({ ok: true, sessionId });
+          socket.send(sessionIdMsg);
+          this.logger.log(`[INPUT CHANNEL ONLY] Sent session ID ${sessionId} to input channel`);
+          this.logger.log(`[INPUT CHANNEL ONLY] This is the ONLY message that should be sent to input channel`);
+        } catch (e) {
+          this.logger.error('Failed to send sessionId to input channel', e as any);
+        }
         return;
       }
 
       const session = this.clientSessions.get(socket);
       if (!session) {
-        this.send(socket, { ok: false, error: 'No active session. Send {type:"start"} first.' });
+        // Error responses should also go to output channel, not input
+        this.sendToOutput(socket, { ok: false, error: 'No active session. Send {type:"start"} first.' });
         return;
       }
 
       if (payload.type === 'audio_chunk') {
-        // Approximate decoded PCM size from base64 length
         const approxBytes = Math.floor((payload.data.length * 3) / 4);
         const c = (this.chunkCounts.get(socket) ?? 0) + 1;
         const t = (this.totalBytes.get(socket) ?? 0) + approxBytes;
@@ -121,30 +180,33 @@ and finally always aware of that you are talking with a child under age 15 years
           this.logger.debug(`audio_chunk x${c}, total=${t} bytes (~${(t/16000/2).toFixed(2)}s)`);
         }
         await this.live.sendAudio(session, payload.data);
-        this.send(socket, { ok: true });
+        this.sendToOutput(socket, { ok: true });
         return;
       }
 
       if (payload.type === 'text') {
-        // Live API sessions are intended for realtime media streaming.
-        // Explicit client text messages are not supported in this proxy.
-        this.send(socket, { ok: false, error: 'text input not supported in live session' });
+        this.sendToOutput(socket, { ok: false, error: 'text input not supported in live session' });
         return;
       }
 
       if (payload.type === 'stop') {
         await this.live.end(session);
         this.clientSessions.delete(socket);
-        this.send(socket, { ok: true });
+        const sessionId = this.socketToSessionId.get(socket);
+        if (sessionId) {
+          this.sessionToOutputSocket.delete(sessionId);
+          this.socketToSessionId.delete(socket);
+          this.sessionMessageBuffers.delete(sessionId);
+        }
+        this.sendToOutput(socket, { ok: true });
         return;
       }
 
-      this.send(socket, { ok: false, error: 'Unknown message type' });
+      this.sendToOutput(socket, { ok: false, error: 'Unknown message type' });
     } catch (e: any) {
-      this.logger.error('Gateway message error', e);
-      this.send(socket, { ok: false, error: e?.message ?? 'internal error' });
+      this.logger.error('Input gateway message error', e);
+      this.sendToOutput(socket, { ok: false, error: e?.message ?? 'internal error' });
     }
   }
 }
-
 
