@@ -12,6 +12,10 @@ export interface LiveSessionConfig {
   inputAudioTranscription?: Record<string, unknown>;
   outputAudioTranscription?: Record<string, unknown>;
   systemInstruction?: string | { parts: Array<{ text: string }> };
+  contextWindowCompression?: {
+    slidingWindow?: {};
+    triggerTokens?: number;
+  };
 }
 
 export interface LiveSession {
@@ -45,6 +49,7 @@ export class GeminiLiveService {
         ...(config?.inputAudioTranscription && { inputAudioTranscription: config.inputAudioTranscription }),
         ...(config?.outputAudioTranscription && { outputAudioTranscription: config.outputAudioTranscription }),
         ...(config?.systemInstruction && { systemInstruction: config.systemInstruction }),
+        ...(config?.contextWindowCompression && { contextWindowCompression: config.contextWindowCompression }),
       },
       callbacks: {
         onopen: () => {

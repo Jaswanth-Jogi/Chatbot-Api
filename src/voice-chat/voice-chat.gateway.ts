@@ -85,6 +85,11 @@ export class VoiceChatGateway implements OnGatewayInit {
           'gemini-2.5-flash-native-audio-preview-09-2025',
           {
             responseModalities: [Modality.AUDIO],
+            // Context window compression: Enables unlimited session duration
+            // Gemini automatically compresses old context on server side
+            contextWindowCompression: {
+              slidingWindow: {},
+            },
             // Enable transcriptions to get text versions of audio
             inputAudioTranscription: {
               // Transcribe user's speech (input audio)
