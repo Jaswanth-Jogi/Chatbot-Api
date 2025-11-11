@@ -6,7 +6,7 @@ import { Modality, MediaResolution, Session, LiveServerMessage } from '@google/g
 import { ChatService } from '../chat/chat.service';
 
 type ClientMessage =
-  | { type: 'start'; config?: any; resumptionHandle?: string }
+  | { type: 'start'; config?: any; resumptionHandle?: string; chatSessionId?: string }
   | { type: 'audio_chunk'; data: string }
   | { type: 'text'; text: string; end?: boolean }
   | { type: 'stop' };
@@ -30,6 +30,7 @@ export class VoiceChatGateway implements OnGatewayInit {
   private socketToId = new Map<WebSocket, string>(); // socket -> unique socketId
   private resumptionTokens = new Map<string, string>(); // socketId -> resumption token
   private tokenExpiration = new Map<string, number>(); // socketId -> expiration timestamp (2 hours)
+  private chatSessionIds = new Map<WebSocket, string>(); // socket -> chatSessionId
   private socketState = new Map<string, { // socketId -> state to preserve across reconnections
     userTranscription: string;
     modelTranscription: string;
@@ -78,6 +79,7 @@ export class VoiceChatGateway implements OnGatewayInit {
       
       // Clean up socket mapping (but keep token and state for potential reconnection)
       this.socketToId.delete(socket);
+      this.chatSessionIds.delete(socket);
       
       this.logger.log('Client disconnected');
     });
@@ -140,7 +142,13 @@ export class VoiceChatGateway implements OnGatewayInit {
       if (payload.type === 'start') {
         const socketId = this.getSocketId(socket);
         const resumptionHandle = payload.resumptionHandle;
+        const chatSessionId = payload.chatSessionId;
         const isResuming = !!resumptionHandle;
+        
+        // Store chatSessionId for this socket
+        if (chatSessionId) {
+          this.chatSessionIds.set(socket, chatSessionId);
+        }
         
         // Check token expiration if resuming
         if (isResuming) {
@@ -561,7 +569,8 @@ and finally always aware of that you are talking with a child under age 15 years
 
     if (userTranscription && modelTranscription) {
       try {
-        await this.chatService.saveVoiceChatTurn(userTranscription, modelTranscription);
+        const chatSessionId = this.chatSessionIds.get(socket);
+        await this.chatService.saveVoiceChatTurn(userTranscription, modelTranscription, chatSessionId);
         this.logger.debug(`Saved voice chat turn: user="${userTranscription.substring(0, 50)}...", model="${modelTranscription.substring(0, 50)}..."`);
         
         // Clear timeout since we've saved

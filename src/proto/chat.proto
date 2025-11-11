@@ -9,12 +9,22 @@ service ChatService {
   
   // Get chat history
   rpc GetChatHistory(Empty) returns (ChatHistoryResponse);
+  
+  // Create a new chat session
+  rpc CreateChatSession(CreateChatSessionRequest) returns (ChatSession);
+  
+  // Get all chat sessions (sorted by updatedAt ascending)
+  rpc GetChatSessions(Empty) returns (ChatSessionsResponse);
+  
+  // Get a chat session with all its messages
+  rpc GetChatSessionWithMessages(GetChatSessionRequest) returns (ChatSessionWithMessagesResponse);
 }
 
 // Request to send a message
 message SendMessageRequest {
   string message = 1;
   repeated ChatMessage history = 2;
+  string chatSessionId = 3; // Optional chat session ID to link message to session
 }
 
 // Response containing a chat message
@@ -31,4 +41,33 @@ message ChatHistoryResponse {
 
 // Empty message
 message Empty {}
+
+// Request to create a chat session
+message CreateChatSessionRequest {
+  string title = 1; // Optional title (will be set from first message if not provided)
+}
+
+// Chat session information
+message ChatSession {
+  string id = 1; // ObjectId as string
+  string title = 2; // Session title
+  string createdAt = 3; // ISO timestamp
+  string updatedAt = 4; // ISO timestamp
+}
+
+// Response containing list of chat sessions
+message ChatSessionsResponse {
+  repeated ChatSession sessions = 1;
+}
+
+// Request to get a chat session
+message GetChatSessionRequest {
+  string sessionId = 1; // Chat session ObjectId as string
+}
+
+// Response containing session with messages
+message ChatSessionWithMessagesResponse {
+  ChatSession session = 1;
+  repeated ChatMessage messages = 2;
+}
 

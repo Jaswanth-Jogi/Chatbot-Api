@@ -1,10 +1,13 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
+import { Document, Types } from 'mongoose';
 
 export type ChatDocument = Chat & Document;
 
 @Schema({ timestamps: true, collection: 'chats' })
 export class Chat {
+  @Prop({ type: Types.ObjectId, ref: 'ChatSession', required: false })
+  chatSessionId?: Types.ObjectId;
+
   @Prop({ required: true, enum: ['user', 'model'] })
   role: string;
 

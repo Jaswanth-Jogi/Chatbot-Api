@@ -1,9 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Chat, ChatDocument } from '../schemas/chat.schema';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { ConfigService } from '@nestjs/config';
+import { ChatSessionService } from './chat-session.service';
 
 @Injectable()
 export class ChatService {
@@ -14,6 +15,7 @@ export class ChatService {
     @InjectModel(Chat.name)
     private readonly chatModel: Model<ChatDocument>,
     private configService: ConfigService,
+    private readonly chatSessionService: ChatSessionService,
   ) {
     const apiKey = this.configService.get<string>('GEMINI_API_KEY');
     if (!apiKey) {
@@ -22,7 +24,11 @@ export class ChatService {
     this.genAI = new GoogleGenerativeAI(apiKey);
   }
 
-  async sendMessage(message: string, history: Array<{ role: string; content: string }>): Promise<string> {
+  async sendMessage(
+    message: string,
+    history: Array<{ role: string; content: string }>,
+    chatSessionId?: string,
+  ): Promise<string> {
     try {
       // System instruction: Define AI role for children's text chat
       const systemInstructionText = `role : you are "Oriel", a child personal companian and a whole system yourself.
@@ -71,8 +77,24 @@ and finally always aware of that you are talking with a child under age 15 years
       const response = await result.response;
       const responseText = response.text();
 
+      // Convert chatSessionId string to ObjectId if provided
+      const sessionObjectId = chatSessionId ? new Types.ObjectId(chatSessionId) : undefined;
+
+      // If this is the first message in a session, update the session title
+      if (sessionObjectId) {
+        // Check if this is the first message (no previous chats for this session)
+        const existingChats = await this.chatModel.countDocuments({ chatSessionId: sessionObjectId });
+        if (existingChats === 0) {
+          // First message - set title from user message
+          await this.chatSessionService.updateSessionTitle(sessionObjectId.toString(), message);
+        }
+        // Update session timestamp
+        await this.chatSessionService.updateSessionTimestamp(sessionObjectId.toString());
+      }
+
       // Save text chat turn: user input with model response in the same document
       await this.chatModel.create({
+        chatSessionId: sessionObjectId,
         role: 'user',
         content: message,
         modelResponse: responseText,
@@ -117,10 +139,30 @@ and finally always aware of that you are talking with a child under age 15 years
     return messages;
   }
 
-  async saveVoiceChatTurn(userInput: string, modelResponse: string): Promise<void> {
+  async saveVoiceChatTurn(
+    userInput: string,
+    modelResponse: string,
+    chatSessionId?: string,
+  ): Promise<void> {
     try {
+      // Convert chatSessionId string to ObjectId if provided
+      const sessionObjectId = chatSessionId ? new Types.ObjectId(chatSessionId) : undefined;
+
+      // If this is the first message in a session, update the session title
+      if (sessionObjectId) {
+        // Check if this is the first message (no previous chats for this session)
+        const existingChats = await this.chatModel.countDocuments({ chatSessionId: sessionObjectId });
+        if (existingChats === 0) {
+          // First message - set title from user input
+          await this.chatSessionService.updateSessionTitle(sessionObjectId.toString(), userInput);
+        }
+        // Update session timestamp
+        await this.chatSessionService.updateSessionTimestamp(sessionObjectId.toString());
+      }
+
       // Save voice chat turn: user input with model response in the same document
       await this.chatModel.create({
+        chatSessionId: sessionObjectId,
         role: 'user',
         content: userInput,
         modelResponse: modelResponse,
