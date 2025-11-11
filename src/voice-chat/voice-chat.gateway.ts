@@ -298,7 +298,7 @@ and finally always aware of that you are talking with a child under age 15 years
         if (!isResuming && chatHistory && chatHistory.length > 0) {
           try {
             // Limit to last 5 messages to avoid excessive token usage
-            const recentHistory = chatHistory.slice(-5);
+            const recentHistory = chatHistory;
             
             // Format history as a single conversation context string
             const contextParts = recentHistory.map((msg) => {
