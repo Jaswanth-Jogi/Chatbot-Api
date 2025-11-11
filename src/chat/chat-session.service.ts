@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { ChatSession, ChatSessionDocument } from '../schemas/chat-session.schema';
 import { Chat, ChatDocument } from '../schemas/chat.schema';
 
@@ -34,10 +34,10 @@ export class ChatSessionService {
   }
 
   async getAllSessions(): Promise<ChatSessionDocument[]> {
-    // Sort by updatedAt ascending (oldest first)
+    // Sort by updatedAt descending (most recent first)
     const sessions = await this.chatSessionModel
       .find()
-      .sort({ updatedAt: 1 })
+      .sort({ updatedAt: -1 })
       .exec();
     return sessions;
   }
@@ -52,8 +52,10 @@ export class ChatSessionService {
     }
 
     // Fetch all chats for this session, sorted by timestamp
+    // Convert sessionId string to ObjectId for query
+    const sessionObjectId = new Types.ObjectId(sessionId);
     const messages = await this.chatModel
-      .find({ chatSessionId: sessionId })
+      .find({ chatSessionId: sessionObjectId })
       .sort({ timestamp: 1 })
       .exec();
 
