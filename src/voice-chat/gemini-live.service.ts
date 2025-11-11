@@ -58,64 +58,64 @@ export class GeminiLiveService {
       },
       callbacks: {
         onopen: () => {
-          this.logger.debug('Gemini Live session opened');
+          // this.logger.debug('Gemini Live session opened');
           callbacks?.onOpen?.();
         },
         onmessage: (message: LiveServerMessage) => {
           try {
             // Print full message structure
-            const fullMessage = JSON.stringify(message, null, 2);
-            this.logger.log('=== Gemini Live Full Response ===');
-            this.logger.log(fullMessage);
+            // const fullMessage = JSON.stringify(message, null, 2);
+            // this.logger.log('=== Gemini Live Full Response ===');
+            // this.logger.log(fullMessage);
             
             // Extract and log transcriptions if present
-            if (message.serverContent) {
-              const sc = message.serverContent as any;
-              
-              // Input transcription (user's speech)
-              if (sc.inputAudioTranscription) {
-                this.logger.log('--- INPUT TRANSCRIPTION (User Speech) ---');
-                this.logger.log(JSON.stringify(sc.inputAudioTranscription, null, 2));
-              }
-              
-              // Output transcription (model's speech)
-              if (sc.outputAudioTranscription) {
-                this.logger.log('--- OUTPUT TRANSCRIPTION (Model Speech) ---');
-                this.logger.log(JSON.stringify(sc.outputAudioTranscription, null, 2));
-              }
-              
-              // Model turn with text parts
-              if (sc.modelTurn?.parts) {
-                const textParts = sc.modelTurn.parts
-                  .filter((p: any) => p.text)
-                  .map((p: any) => p.text);
-                if (textParts.length > 0) {
-                  this.logger.log('--- MODEL TEXT PARTS ---');
-                  textParts.forEach((text: string, idx: number) => {
-                    this.logger.log(`Text Part ${idx + 1}: ${text}`);
-                  });
-                }
-              }
-              
-              // Turn complete indicator
-              if (sc.turnComplete) {
-                this.logger.log('--- TURN COMPLETE ---');
-              }
-            }
+            // if (message.serverContent) {
+            //   const sc = message.serverContent as any;
+            //   
+            //   // Input transcription (user's speech)
+            //   if (sc.inputAudioTranscription) {
+            //     this.logger.log('--- INPUT TRANSCRIPTION (User Speech) ---');
+            //     this.logger.log(JSON.stringify(sc.inputAudioTranscription, null, 2));
+            //   }
+            //   
+            //   // Output transcription (model's speech)
+            //   if (sc.outputAudioTranscription) {
+            //     this.logger.log('--- OUTPUT TRANSCRIPTION (Model Speech) ---');
+            //     this.logger.log(JSON.stringify(sc.outputAudioTranscription, null, 2));
+            //   }
+            //   
+            //   // Model turn with text parts
+            //   if (sc.modelTurn?.parts) {
+            //     const textParts = sc.modelTurn.parts
+            //       .filter((p: any) => p.text)
+            //       .map((p: any) => p.text);
+            //     if (textParts.length > 0) {
+            //       this.logger.log('--- MODEL TEXT PARTS ---');
+            //       textParts.forEach((text: string, idx: number) => {
+            //         this.logger.log(`Text Part ${idx + 1}: ${text}`);
+            //       });
+            //     }
+            //   }
+            //   
+            //   // Turn complete indicator
+            //   if (sc.turnComplete) {
+            //     this.logger.log('--- TURN COMPLETE ---');
+            //   }
+            // }
             
-            this.logger.log('=== End of Response ===\n');
+            // this.logger.log('=== End of Response ===\n');
           } catch (e) {
-            this.logger.error('Error parsing Live message:', e);
-            this.logger.debug('Raw message received (unserializable)');
+            // this.logger.error('Error parsing Live message:', e);
+            // this.logger.debug('Raw message received (unserializable)');
           }
           callbacks?.onMessage?.(message);
         },
         onerror: (e: ErrorEvent) => {
-          this.logger.error(`Gemini Live error: ${e.message}`);
+          // this.logger.error(`Gemini Live error: ${e.message}`);
           callbacks?.onError?.(e);
         },
         onclose: (e: CloseEvent) => {
-          this.logger.debug(`Gemini Live closed: ${e.reason}`);
+          // this.logger.debug(`Gemini Live closed: ${e.reason}`);
           callbacks?.onClose?.(e);
         },
       },
@@ -144,7 +144,7 @@ export class GeminiLiveService {
     try {
       session.close();
     } catch (e) {
-      this.logger.warn('Error closing session', e as any);
+      // this.logger.warn('Error closing session', e as any);
     }
   }
 }

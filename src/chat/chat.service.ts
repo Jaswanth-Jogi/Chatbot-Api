@@ -109,9 +109,16 @@ and finally always aware of that you are talking with a child under age 15 years
     }
   }
 
-  async getChatHistory(): Promise<Array<{ role: string; content: string; timestamp: Date }>> {
+  async getChatHistory(chatSessionId?: string): Promise<Array<{ role: string; content: string; timestamp: Date }>> {
+    // Enforce per-session history only
+    if (!chatSessionId) {
+      return [];
+    }
+
+    const query: any = { chatSessionId: new Types.ObjectId(chatSessionId) };
+
     const chats = await this.chatModel
-      .find()
+      .find(query)
       .sort({ timestamp: 1 })
       .lean();
 
