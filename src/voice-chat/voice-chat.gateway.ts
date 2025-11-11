@@ -195,6 +195,9 @@ export class VoiceChatGateway implements OnGatewayInit {
           }
         }
 
+        // Read compression trigger threshold from environment (string as required by API), default to '0.8'
+        const compressionTrigger = process.env.GEMINI_LIVE_COMPRESSION_TRIGGER || '0.8';
+
         const session = await this.live.openSession(
           // Official Live-capable model name per docs
           'gemini-2.5-flash-native-audio-preview-09-2025',
@@ -204,6 +207,7 @@ export class VoiceChatGateway implements OnGatewayInit {
             // Gemini automatically compresses old context on server side
             contextWindowCompression: {
               slidingWindow: {},
+              triggerTokens: compressionTrigger,
             },
             // Session resumption: Enable for new sessions, use handle for resuming
             sessionResumption: isResuming && resumptionHandle
@@ -698,14 +702,15 @@ and finally always aware of that you are talking with a child under age 15 years
     // Restore socket state if available
     this.restoreSocketState(socketId, socket);
     
-    // Create new Gemini session with resumption token
-    // Keep the same client WebSocket connection
+    // Read compression trigger threshold from environment (string as required by API), default to '0.8'
+    const compressionTrigger = process.env.GEMINI_LIVE_COMPRESSION_TRIGGER || '0.9';
     const newSession = await this.live.openSession(
       'gemini-2.5-flash-native-audio-preview-09-2025',
       {
         responseModalities: [Modality.AUDIO],
         contextWindowCompression: {
           slidingWindow: {},
+          triggerTokens: compressionTrigger,
         },
         // Resume the Gemini session using the resumption token
         sessionResumption: { handle: resumptionToken },
