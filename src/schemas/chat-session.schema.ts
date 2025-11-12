@@ -13,6 +13,12 @@ export class ChatSession {
 
   @Prop({ type: Date, default: Date.now })
   updatedAt: Date;
+
+  @Prop({ required: false })
+  resumptionToken?: string;
+
+  @Prop({ type: Date, required: false })
+  resumptionTokenExpiration?: Date;
 }
 
 export const ChatSessionSchema = SchemaFactory.createForClass(ChatSession);

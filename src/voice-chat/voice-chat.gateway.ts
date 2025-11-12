@@ -4,6 +4,7 @@ import { Server as WsServer, WebSocket } from 'ws';
 import { GeminiLiveService } from './gemini-live.service';
 import { Modality, MediaResolution, Session, LiveServerMessage } from '@google/genai';
 import { ChatService } from '../chat/chat.service';
+import { ChatSessionService } from '../chat/chat-session.service';
 
 type ClientMessage =
   | { type: 'start'; config?: any; resumptionHandle?: string; chatSessionId?: string }
@@ -44,6 +45,7 @@ export class VoiceChatGateway implements OnGatewayInit {
   constructor(
     private readonly live: GeminiLiveService,
     private readonly chatService: ChatService,
+    private readonly chatSessionService: ChatSessionService,
   ) {}
 
   afterInit(server: WsServer) {
@@ -148,16 +150,41 @@ export class VoiceChatGateway implements OnGatewayInit {
       const payload = JSON.parse(typeof data === 'string' ? data : data.toString()) as ClientMessage;
       if (payload.type === 'start') {
         const socketId = this.getSocketId(socket);
-        const resumptionHandle = payload.resumptionHandle;
+        let resumptionHandle = payload.resumptionHandle;
         const chatSessionId = payload.chatSessionId;
-        const isResuming = !!resumptionHandle;
+        let isResuming = !!resumptionHandle;
         
         // Store chatSessionId for this socket
         if (chatSessionId) {
           this.chatSessionIds.set(socket, chatSessionId);
         }
         
-        // Check token expiration if resuming
+        // If no resumption handle provided, check database for stored token
+        if (!isResuming && chatSessionId) {
+          try {
+            const session = await this.chatSessionService.getSession(chatSessionId);
+            if (session?.resumptionToken && session?.resumptionTokenExpiration) {
+              const expiration = new Date(session.resumptionTokenExpiration);
+              if (expiration > new Date()) {
+                // Valid stored token found - use it to resume
+                resumptionHandle = session.resumptionToken;
+                isResuming = true;
+                // Store in memory for this session
+                this.resumptionTokens.set(socketId, session.resumptionToken);
+                this.tokenExpiration.set(socketId, expiration.getTime());
+                this.logger.log(`Found valid stored resumption token for chat session ${chatSessionId}, resuming Gemini session`); // KEEP: Resuming with stored token
+              } else {
+                // Token expired - clear it from database
+                this.logger.log(`Stored resumption token expired for chat session ${chatSessionId}, creating fresh session`); // KEEP: Token expired
+                await this.chatSessionService.updateResumptionToken(chatSessionId, null, null);
+              }
+            }
+          } catch (error) {
+            // this.logger.warn('Failed to check stored resumption token', error);
+          }
+        }
+        
+        // Check token expiration if resuming (from either client or database)
         if (isResuming) {
           const expiration = this.tokenExpiration.get(socketId);
           if (expiration && Date.now() > expiration) {
@@ -165,10 +192,22 @@ export class VoiceChatGateway implements OnGatewayInit {
             // Clear expired token
             this.resumptionTokens.delete(socketId);
             this.tokenExpiration.delete(socketId);
+            // Clear from database if chatSessionId exists
+            if (chatSessionId) {
+              try {
+                await this.chatSessionService.updateResumptionToken(chatSessionId, null, null);
+              } catch (error) {
+                // Ignore errors
+              }
+            }
             // Fall through to create fresh session
+            isResuming = false;
+            resumptionHandle = undefined;
           } else if (!expiration) {
             // this.logger.warn(`No expiration found for resumption token, treating as expired`);
             // Fall through to create fresh session
+            isResuming = false;
+            resumptionHandle = undefined;
           }
         }
         
@@ -473,10 +512,22 @@ and finally always aware of that you are talking with a child under age 15 years
           const token = update.newHandle;
           // Store token with 2-hour expiration (7200000 ms)
           const expiration = Date.now() + 2 * 60 * 60 * 1000;
+          const expirationDate = new Date(expiration);
           this.resumptionTokens.set(socketId, token);
           this.tokenExpiration.set(socketId, expiration);
-          this.logger.log(`Resumption token received for socket ${socketId}, expires at ${new Date(expiration).toISOString()}`); // KEEP: Token received
+          this.logger.log(`Resumption token received for socket ${socketId}, expires at ${expirationDate.toISOString()}`); // KEEP: Token received
           this.logger.log(`Resumption token: ${token}`); // Print token value
+          
+          // Save token to database if chatSessionId exists
+          const chatSessionId = this.chatSessionIds.get(socket);
+          if (chatSessionId) {
+            try {
+              await this.chatSessionService.updateResumptionToken(chatSessionId, token, expirationDate);
+              this.logger.log(`Saved resumption token to database for chat session ${chatSessionId}`); // KEEP: Token saved to DB
+            } catch (error) {
+              this.logger.warn(`Failed to save resumption token to database for chat session ${chatSessionId}`, error);
+            }
+          }
           
           // Forward token to client
           this.send(socket, {

@@ -70,5 +70,30 @@ export class ChatSessionService {
       updatedAt: new Date(),
     });
   }
+
+  async updateResumptionToken(sessionId: string, token: string | null, expiration: Date | null): Promise<void> {
+    const updateData: any = {
+      updatedAt: new Date(),
+    };
+    if (token) {
+      updateData.resumptionToken = token;
+    } else {
+      updateData.$unset = { resumptionToken: '', resumptionTokenExpiration: '' };
+    }
+    if (expiration) {
+      updateData.resumptionTokenExpiration = expiration;
+    }
+    
+    await this.chatSessionModel.findByIdAndUpdate(sessionId, updateData);
+    if (token) {
+      this.logger.debug(`Updated resumption token for session ${sessionId}, expires at ${expiration?.toISOString()}`);
+    } else {
+      this.logger.debug(`Cleared resumption token for session ${sessionId}`);
+    }
+  }
+
+  async getSession(sessionId: string): Promise<ChatSessionDocument | null> {
+    return await this.chatSessionModel.findById(sessionId).exec();
+  }
 }
 
