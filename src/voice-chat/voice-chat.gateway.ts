@@ -31,6 +31,7 @@ export class VoiceChatGateway implements OnGatewayInit {
   private resumptionTokens = new Map<string, string>(); // socketId -> resumption token
   private tokenExpiration = new Map<string, number>(); // socketId -> expiration timestamp (2 hours)
   private chatSessionIds = new Map<WebSocket, string>(); // socket -> chatSessionId
+  private intentionalStops = new Set<string>(); // socketId -> track intentional stops to prevent auto-reconnection
   private socketState = new Map<string, { // socketId -> state to preserve across reconnections
     userTranscription: string;
     modelTranscription: string;
@@ -279,6 +280,16 @@ and finally always aware of that you are talking with a child under age 15 years
                 return;
               }
               
+              // Check if this was an intentional stop (user clicked stop button)
+              if (this.intentionalStops.has(socketId)) {
+                this.logger.log(`Gemini session closed due to intentional stop for socket ${socketId}, not reconnecting`); // KEEP: Intentional stop
+                this.clientSessions.delete(socket);
+                this.intentionalStops.delete(socketId);
+                this.isReconnecting.delete(socketId);
+                this.reconnectionAttempts.delete(socketId);
+                return;
+              }
+              
               // Check reconnection attempt limit (max 3 attempts to prevent infinite loops)
               const attempts = this.reconnectionAttempts.get(socketId) || 0;
               if (attempts >= 3) {
@@ -334,11 +345,14 @@ and finally always aware of that you are talking with a child under age 15 years
         // Store session first
         this.clientSessions.set(socket, session);
         
+        // Clear intentional stop flag when starting a new session
+        this.intentionalStops.delete(socketId);
+        
         // Send chat history as context after session is created (only for fresh sessions)
         if (!isResuming && chatHistory && chatHistory.length > 0) {
           try {
             // Limit to last 5 messages to avoid excessive token usage
-            const recentHistory = chatHistory.slice(-5);
+            const recentHistory = chatHistory;
             
             // Format history as a single conversation context string
             const contextParts = recentHistory.map((msg) => {
@@ -422,6 +436,10 @@ and finally always aware of that you are talking with a child under age 15 years
       }
 
       if (payload.type === 'stop') {
+        // Mark this as an intentional stop to prevent auto-reconnection
+        const socketId = this.getSocketId(socket);
+        this.intentionalStops.add(socketId);
+        
         // Clear any pending timeout and save immediately
         this.clearSaveTimeout(socket);
         await this.trySaveTurn(socket);
@@ -458,6 +476,7 @@ and finally always aware of that you are talking with a child under age 15 years
           this.resumptionTokens.set(socketId, token);
           this.tokenExpiration.set(socketId, expiration);
           this.logger.log(`Resumption token received for socket ${socketId}, expires at ${new Date(expiration).toISOString()}`); // KEEP: Token received
+          this.logger.log(`Resumption token: ${token}`); // Print token value
           
           // Forward token to client
           this.send(socket, {
@@ -759,6 +778,16 @@ and finally always aware of that you are talking with a child under age 15 years
           this.clearSaveTimeout(socket);
           await this.trySaveTurn(socket);
           
+          // Check if this was an intentional stop (user clicked stop button)
+          if (this.intentionalStops.has(socketIdForClose)) {
+            this.logger.log(`Gemini session closed due to intentional stop for socket ${socketIdForClose} in recursive handler, not reconnecting`); // KEEP: Intentional stop
+            this.clientSessions.delete(socket);
+            this.intentionalStops.delete(socketIdForClose);
+            this.isReconnecting.delete(socketIdForClose);
+            this.reconnectionAttempts.delete(socketIdForClose);
+            return;
+          }
+          
           // Check reconnection attempt limit
           const attempts = this.reconnectionAttempts.get(socketIdForClose) || 0;
           if (attempts >= 3) {
@@ -818,6 +847,7 @@ and finally always aware of that you are talking with a child under age 15 years
     // Clear reconnecting flag and reset attempt counter on success
     this.isReconnecting.delete(socketId);
     this.reconnectionAttempts.delete(socketId);
+    this.intentionalStops.delete(socketId); // Clear intentional stop flag on successful reconnection
     
     this.logger.log(`Gemini session reconnected successfully for socket ${socketId} - client WebSocket unchanged`); // KEEP: Reconnection success
   }
