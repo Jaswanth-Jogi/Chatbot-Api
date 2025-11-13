@@ -48,6 +48,16 @@ export class VoiceChatGateway implements OnGatewayInit {
     private readonly chatSessionService: ChatSessionService,
   ) {}
 
+  private getGenerationSettings() {
+    return {
+      temperature: 2,                 // Gemini range: 0.0 (deterministic) to 2.0 (creative)
+      frequencyPenalty: 0.2,          // Gemini range: -2.0 to 2.0 (scaled by repetition count)
+      presencePenalty: -0.2,           // Gemini range: -2.0 to 2.0 (binary once token appears)
+      stopSequences: [], // Up to 5 UTF-8 strings; generation stops at first match
+      //maxOutputTokens: 300,           // 1 to model.output_token_limit (131072 for this model)
+    };
+  }
+
   afterInit(server: WsServer) {
     // this.logger.log('WS Gateway initialized at /voice-chat');
     server.on('connection', (socket: WebSocket) => this.onConnection(socket));
@@ -246,6 +256,7 @@ export class VoiceChatGateway implements OnGatewayInit {
               slidingWindow: {},
               triggerTokens: "100000",  // Custom: compress at 100k tokens (76% of 131k limit)
             },
+            ...this.getGenerationSettings(),
             // Session resumption: Enable for new sessions, use handle for resuming
             sessionResumption: isResuming && resumptionHandle
               ? { handle: resumptionHandle }
@@ -777,6 +788,7 @@ and finally always aware of that you are talking with a child under age 15 years
           slidingWindow: {},
           triggerTokens: "100000",  // Custom: compress at 100k tokens (76% of 131k limit)
         },
+        ...this.getGenerationSettings(),
         // Resume the Gemini session using the resumption token
         sessionResumption: { handle: resumptionToken },
         inputAudioTranscription: {},

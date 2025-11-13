@@ -19,6 +19,11 @@ export interface LiveSessionConfig {
   sessionResumption?: {
     handle?: string;  // Resumption token for resuming a session
   };
+  temperature?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+  stopSequences?: string[];
+  maxOutputTokens?: number;
 }
 
 export interface LiveSession {
@@ -53,6 +58,11 @@ export class GeminiLiveService {
         ...(config?.outputAudioTranscription && { outputAudioTranscription: config.outputAudioTranscription }),
         ...(config?.systemInstruction && { systemInstruction: config.systemInstruction }),
         ...(config?.contextWindowCompression && { contextWindowCompression: config.contextWindowCompression }),
+        ...(config?.temperature !== undefined && { temperature: config.temperature }),
+        ...(config?.frequencyPenalty !== undefined && { frequencyPenalty: config.frequencyPenalty }),
+        ...(config?.presencePenalty !== undefined && { presencePenalty: config.presencePenalty }),
+        ...(config?.stopSequences && config.stopSequences.length > 0 && { stopSequences: config.stopSequences }),
+        ...(config?.maxOutputTokens !== undefined && { maxOutputTokens: config.maxOutputTokens }),
         // Session resumption: Enable if handle provided (resume) or empty object (enable for future resumption)
         ...(config?.sessionResumption !== undefined && { sessionResumption: config.sessionResumption }),
       },
