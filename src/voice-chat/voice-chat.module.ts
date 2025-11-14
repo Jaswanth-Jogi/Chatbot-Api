@@ -5,6 +5,7 @@ import { VoiceChatService } from './voice-chat.service';
 import { VoiceChatGateway } from './voice-chat.gateway';
 import { GeminiLiveService } from './gemini-live.service';
 import { ChatModule } from '../chat/chat.module';
+import { PromptsModule } from '../prompts/prompts.module';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { ChatModule } from '../chat/chat.module';
       { name: VoiceChat.name, schema: VoiceChatSchema },
     ]),
     ChatModule, // Import ChatModule to access ChatService
+    PromptsModule, // Import PromptsModule to access PromptsService
   ],
   providers: [VoiceChatService, VoiceChatGateway, GeminiLiveService],
   exports: [VoiceChatService, GeminiLiveService],
