@@ -30,10 +30,13 @@ export class ChatService {
     message: string,
     history: Array<{ role: string; content: string }>,
     chatSessionId?: string,
+    childId?: string,
   ): Promise<string> {
     try {
-      // Fetch system instruction from database
-      const systemInstructionText = await this.promptsService.getPromptByTitle('SystemInstruction');
+      // Fetch system instruction with child data from database
+      const systemInstructionText = childId
+        ? await this.promptsService.buildSystemInstructionWithChildData(childId)
+        : await this.promptsService.getPromptByTitle('SystemInstruction');
       if (!systemInstructionText) {
         this.logger.warn('System instruction not found in database, proceeding without it');
       }

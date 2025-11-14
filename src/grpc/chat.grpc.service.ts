@@ -14,12 +14,14 @@ export class ChatGrpcService {
     message: string;
     history: Array<{ role: string; content: string }>;
     chatSessionId?: string;
+    childId?: string;
   }) {
     try {
       const response = await this.chatService.sendMessage(
         data.message,
         data.history || [],
         data.chatSessionId,
+        data.childId,
       );
 
       return {

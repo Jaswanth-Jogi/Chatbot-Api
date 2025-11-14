@@ -25,6 +25,7 @@ message SendMessageRequest {
   string message = 1;
   repeated ChatMessage history = 2;
   string chatSessionId = 3; // Optional chat session ID to link message to session
+  string childId = 4; // Optional child ID for personalized system instruction
 }
 
 // Response containing a chat message

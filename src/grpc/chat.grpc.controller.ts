@@ -11,6 +11,7 @@ export class ChatGrpcController {
     message: string;
     history: Array<{ role: string; content: string }>;
     chatSessionId?: string;
+    childId?: string;
   }) {
     return this.chatGrpcService.sendMessage(data);
   }

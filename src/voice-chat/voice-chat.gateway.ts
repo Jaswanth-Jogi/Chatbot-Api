@@ -264,8 +264,8 @@ export class VoiceChatGateway implements OnGatewayInit {
           }
         }
 
-        // Fetch system instruction from database
-        const systemInstruction = await this.promptsService.getPromptByTitle('SystemInstruction');
+        // Fetch system instruction with child data from database
+        const systemInstruction = await this.promptsService.buildSystemInstructionWithChildData(childId);
         if (!systemInstruction) {
           this.logger.warn('System instruction not found in database, proceeding without it');
         }
@@ -782,8 +782,11 @@ export class VoiceChatGateway implements OnGatewayInit {
     // Restore socket state if available
     this.restoreSocketState(socketId, socket);
     
-    // Fetch system instruction from database
-    const systemInstruction = await this.promptsService.getPromptByTitle('SystemInstruction');
+    // Fetch system instruction with child data from database
+    const childId = this.childIds.get(socket);
+    const systemInstruction = childId
+      ? await this.promptsService.buildSystemInstructionWithChildData(childId)
+      : await this.promptsService.getPromptByTitle('SystemInstruction');
     if (!systemInstruction) {
       this.logger.warn('System instruction not found in database during reconnection, proceeding without it');
     }
