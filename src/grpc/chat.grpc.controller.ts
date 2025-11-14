@@ -21,13 +21,19 @@ export class ChatGrpcController {
   }
 
   @GrpcMethod('ChatService', 'CreateChatSession')
-  async createChatSession(data: { title?: string }) {
-    return this.chatGrpcService.createChatSession(data.title);
+  async createChatSession(data: { title?: string; childId?: string }) {
+    if (!data.childId) {
+      throw new Error('childId is required');
+    }
+    return this.chatGrpcService.createChatSession(data.childId, data.title);
   }
 
   @GrpcMethod('ChatService', 'GetChatSessions')
-  async getChatSessions() {
-    return this.chatGrpcService.getChatSessions();
+  async getChatSessions(data: { childId?: string }) {
+    if (!data.childId) {
+      throw new Error('childId is required');
+    }
+    return this.chatGrpcService.getChatSessions(data.childId);
   }
 
   @GrpcMethod('ChatService', 'GetChatSessionWithMessages')

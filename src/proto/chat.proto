@@ -14,7 +14,7 @@ service ChatService {
   rpc CreateChatSession(CreateChatSessionRequest) returns (ChatSession);
   
   // Get all chat sessions (sorted by updatedAt ascending)
-  rpc GetChatSessions(Empty) returns (ChatSessionsResponse);
+  rpc GetChatSessions(GetChatSessionsRequest) returns (ChatSessionsResponse);
   
   // Get a chat session with all its messages
   rpc GetChatSessionWithMessages(GetChatSessionRequest) returns (ChatSessionWithMessagesResponse);
@@ -45,6 +45,7 @@ message Empty {}
 // Request to create a chat session
 message CreateChatSessionRequest {
   string title = 1; // Optional title (will be set from first message if not provided)
+  string childId = 2; // Required child ID
 }
 
 // Chat session information
@@ -63,6 +64,11 @@ message ChatSessionsResponse {
 // Request to get a chat session
 message GetChatSessionRequest {
   string sessionId = 1; // Chat session ObjectId as string
+}
+
+// Request to get chat sessions
+message GetChatSessionsRequest {
+  string childId = 1; // Required child ID to filter sessions
 }
 
 // Response containing session with messages

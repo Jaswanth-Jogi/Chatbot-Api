@@ -8,7 +8,7 @@ import { ChatSessionService } from '../chat/chat-session.service';
 import { PromptsService } from '../prompts/prompts.service';
 
 type ClientMessage =
-  | { type: 'start'; config?: any; resumptionHandle?: string; chatSessionId?: string }
+  | { type: 'start'; config?: any; resumptionHandle?: string; chatSessionId?: string; childId?: string }
   | { type: 'audio_chunk'; data: string }
   | { type: 'text'; text: string; end?: boolean }
   | { type: 'stop' };
@@ -33,6 +33,7 @@ export class VoiceChatGateway implements OnGatewayInit {
   private resumptionTokens = new Map<string, string>(); // socketId -> resumption token
   private tokenExpiration = new Map<string, number>(); // socketId -> expiration timestamp (2 hours)
   private chatSessionIds = new Map<WebSocket, string>(); // socket -> chatSessionId
+  private childIds = new Map<WebSocket, string>(); // socket -> childId
   private intentionalStops = new Set<string>(); // socketId -> track intentional stops to prevent auto-reconnection
   private socketState = new Map<string, { // socketId -> state to preserve across reconnections
     userTranscription: string;
@@ -101,6 +102,7 @@ export class VoiceChatGateway implements OnGatewayInit {
       // Clean up socket mapping (but keep token and state for potential reconnection)
       this.socketToId.delete(socket);
       this.chatSessionIds.delete(socket);
+      this.childIds.delete(socket);
       
       // this.logger.log('Client disconnected');
     });
@@ -164,17 +166,32 @@ export class VoiceChatGateway implements OnGatewayInit {
         const socketId = this.getSocketId(socket);
         let resumptionHandle = payload.resumptionHandle;
         const chatSessionId = payload.chatSessionId;
+        const childId = payload.childId;
         let isResuming = !!resumptionHandle;
         
-        // Store chatSessionId for this socket
+        // Validate childId is required
+        if (!childId) {
+          this.send(socket, { ok: false, error: 'childId is required' });
+          return;
+        }
+        
+        // Store childId and chatSessionId for this socket
+        this.childIds.set(socket, childId);
         if (chatSessionId) {
           this.chatSessionIds.set(socket, chatSessionId);
         }
         
         // If no resumption handle provided, check database for stored token
+        // Verify session belongs to this childId before using token
         if (!isResuming && chatSessionId) {
           try {
             const session = await this.chatSessionService.getSession(chatSessionId);
+            // Verify session belongs to this childId
+            if (session && session.childId && session.childId.toString() !== childId) {
+              this.logger.warn(`Chat session ${chatSessionId} does not belong to childId ${childId}`);
+              this.send(socket, { ok: false, error: 'Chat session does not belong to this child' });
+              return;
+            }
             if (session?.resumptionToken && session?.resumptionTokenExpiration) {
               const expiration = new Date(session.resumptionTokenExpiration);
               if (expiration > new Date()) {

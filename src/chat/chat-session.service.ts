@@ -15,13 +15,14 @@ export class ChatSessionService {
     private readonly chatModel: Model<ChatDocument>,
   ) {}
 
-  async createSession(title?: string): Promise<ChatSessionDocument> {
+  async createSession(childId: string, title?: string): Promise<ChatSessionDocument> {
     const session = await this.chatSessionModel.create({
+      childId: new Types.ObjectId(childId),
       title: title || undefined,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-    this.logger.debug(`Created chat session: ${session._id}, title: ${title || 'untitled'}`);
+    this.logger.debug(`Created chat session: ${session._id}, childId: ${childId}, title: ${title || 'untitled'}`);
     return session;
   }
 
@@ -33,10 +34,10 @@ export class ChatSessionService {
     this.logger.debug(`Updated session ${sessionId} title to: ${title}`);
   }
 
-  async getAllSessions(): Promise<ChatSessionDocument[]> {
+  async getAllSessions(childId: string): Promise<ChatSessionDocument[]> {
     // Sort by updatedAt descending (most recent first)
     const sessions = await this.chatSessionModel
-      .find()
+      .find({ childId: new Types.ObjectId(childId) })
       .sort({ updatedAt: -1 })
       .exec();
     return sessions;

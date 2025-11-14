@@ -44,9 +44,9 @@ export class ChatGrpcService {
     };
   }
 
-  async createChatSession(title?: string) {
+  async createChatSession(childId: string, title?: string) {
     try {
-      const session = await this.chatSessionService.createSession(title);
+      const session = await this.chatSessionService.createSession(childId, title);
       return {
         id: (session._id as Types.ObjectId).toString(),
         title: session.title || '',
@@ -59,9 +59,9 @@ export class ChatGrpcService {
     }
   }
 
-  async getChatSessions() {
+  async getChatSessions(childId: string) {
     try {
-      const sessions = await this.chatSessionService.getAllSessions();
+      const sessions = await this.chatSessionService.getAllSessions(childId);
       return {
         sessions: sessions.map((session) => ({
           id: (session._id as Types.ObjectId).toString(),

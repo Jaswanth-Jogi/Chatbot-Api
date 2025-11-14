@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
+import { Document, Schema as MongooseSchema, Types } from 'mongoose';
 
 export type ChatSessionDocument = ChatSession & Document;
 
@@ -7,6 +7,14 @@ export type ChatSessionDocument = ChatSession & Document;
 export class ChatSession {
   @Prop({ required: false })
   title?: string;
+
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Children',
+    required: true,
+    index: true,
+  })
+  childId: Types.ObjectId;
 
   @Prop({ type: Date, default: Date.now })
   createdAt: Date;
